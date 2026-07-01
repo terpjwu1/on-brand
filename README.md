@@ -48,7 +48,7 @@ Change to `"warn"` for loose mode.
 
 ## What Gets Checked
 
-12 design principle checkers, each independently toggleable:
+14 design principle checkers, each independently toggleable:
 
 | Checker | What it enforces |
 |---------|-----------------|
@@ -63,6 +63,8 @@ Change to `"warn"` for loose mode.
 | `icon-color` | Icons must use Turquoise, Blue Spruce, or Navy only. |
 | `spacing` | Max container width 1440px. Section spacing 64-96px. |
 | `gradient-usage` | Gradients must use Sky tones only (outside hero sections). |
+| `color-pairings` | Enforces text-on-background rules. Sky on Spruce = banned. Poppy never as text. |
+| `color-proportions` | Checks color balance: Poppy ≤5%, tertiaries ≤4%, Turquoise ≤15%. *(always advisory, never blocks)* |
 | `layout-busyness` | ≤5 distinct colors, ≤3 backgrounds. *(always advisory, never blocks)* |
 
 ### Disabling a checker
