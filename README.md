@@ -151,3 +151,100 @@ Re-run the install command to get the latest version. It will overwrite the hook
 ```bash
 npx github:Perficient-Corporate/Perficient-Brand-Hook
 ```
+
+## How It Works (Technical)
+
+### Hook Lifecycle
+
+```
+Claude Code tool call
+    ↓
+PreToolUse (before write)
+    → brand-compliance.cjs receives JSON on stdin
+    → Checks: is this a visual file or doc-gen command?
+    → If yes: prints advisory message to stdout (Claude sees it)
+    → Always exits 0 (never blocks before write)
+    ↓
+Tool executes (file written / command runs)
+    ↓
+PostToolUse (after write)
+    → brand-compliance.cjs receives JSON on stdin
+    → Discovers output files (3-tier discovery)
+    → Parses CSS blocks once, passes to all enabled checkers
+    → Collects violations: strict (⚠) vs advisory (💡)
+    → If strict mode + strict violations: exits 2 (blocks)
+    → If warn mode or advisory-only: exits 0 (reports but allows)
+```
+
+### Checker Registry
+
+One monolithic script with a pluggable checker array. Each checker receives `{content, cssBlocks, filePath, context}` and returns `string[]` violations.
+
+```js
+{ id: 'checker-name', fn: checkerFunction, strictCapable: true|false }
+```
+
+- `strictCapable: true` — violations from this checker can block in strict mode
+- `strictCapable: false` — always advisory (proportion, busyness heuristics)
+
+### CSS Block Parser
+
+Parses content once into `[{selector, properties: [{prop, value}]}]`. All checkers share this parsed structure — no redundant parsing.
+
+Does NOT handle nested `@media` blocks (v1 limitation). Checkers that need media-query awareness fall back to raw content regex.
+
+### Three-Tier File Discovery (PostToolUse Bash)
+
+When a Bash command completes, the hook discovers generated files:
+
+1. **Tier 1: Stdout extraction** — regex scans command output for file paths ending in `.html/.css/.svg`. Highest confidence, zero false positives.
+2. **Tier 2: Recency scan** — walks CWD (max depth 4, skips `node_modules/.git`) for files modified within `scanRecencyMs`. Only fires for build-tool commands (`tsx`, `vite`, `webpack`, etc.).
+3. **Tier 3: Build-tool heuristic** — if the command matches known build tools, widens scan to first-level subdirectories not already in `scanOutputDirs`.
+4. **Tier 4: Fallback** — scans configured `scanOutputDirs` for recently-modified files.
+
+Hard deadline: 4.5s (timeout is 5s). All tiers bail early if deadline approaches.
+
+### Context Detection
+
+The hook detects output format and switches rule sets:
+
+- **Web** (default): strict font requirements, no sidebar bars, white-only card backgrounds
+- **Presentation** (`.pptx` in file/command): allows fallback fonts (Georgia, Arial, Franklin Gothic), Light Grey card fills, Poppy left-accent borders
+
+### Color Normalization
+
+`normalizeToHex(value)` converts any CSS color format to lowercase 6-digit hex:
+- `#075056` → `075056`
+- `#abc` → `aabbcc`
+- `rgb(7, 80, 86)` → `075056`
+- `rgb(999, 0, 0)` → `ff0000` (clamped)
+
+`extractAllColors(value)` returns ALL colors in a multi-value declaration (gradients), splitting scores evenly across them.
+
+### Proportion Scoring
+
+Weighted heuristic estimating visual area from CSS source:
+
+```
+score = selector_weight × property_weight
+```
+
+| Selector | Weight | Property | Weight |
+|----------|--------|----------|--------|
+| body/html | 10 | background | 5 |
+| section/header/footer | 6 | fill/stroke | 3 |
+| .hero/.container | 6 | color (text) | 2 |
+| .card/.panel | 4 | border | 1 |
+| div/article | 4 | box-shadow | 0 |
+| h1-h6/p/li | 2 | non-visual | 0 |
+| span/a/small | 1 | | |
+| inline style="" | 3 | | |
+
+Unrecognized colors still count toward `totalScore` (prevents inflating brand %). Multi-color declarations (gradients) split score evenly across colors.
+
+### Fail Behavior
+
+- Config missing/malformed → defaults to strict, logs to stderr
+- Scanner error → logs to stderr, returns no violations (fail-open)
+- Stdin timeout → 4s watchdog kills process (exit 0)
+- Hook crash → top-level try/catch, exit 0 (never blocks on internal error)
