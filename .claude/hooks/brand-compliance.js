@@ -9,7 +9,14 @@
 const fs = require('fs');
 const path = require('path');
 
-// --- Config loading (fail-open: missing/malformed config = warn mode) ---
+// Watchdog: if stdin never closes, exit cleanly after 4s
+const watchdog = setTimeout(() => {
+  process.stderr.write('brand-compliance: stdin timeout, exiting\n');
+  process.exit(0);
+}, 4000);
+watchdog.unref();
+
+// --- Config loading (fail-open: logs to stderr on error) ---
 function loadConfig() {
   const defaults = {
     mode: 'warn',
@@ -31,6 +38,7 @@ function loadConfig() {
       maxFilesToScan: Math.min(Math.max(Number(parsed.maxFilesToScan) || 20, 1), 100)
     };
   } catch (e) {
+    process.stderr.write(`brand-compliance: config error (${e.message}), falling back to warn mode\n`);
     return defaults;
   }
 }
@@ -95,6 +103,7 @@ function scanFileForViolations(filePath) {
 
     return violations;
   } catch (e) {
+    process.stderr.write(`brand-compliance: scan error on ${filePath}: ${e.message}\n`);
     return [];
   }
 }
@@ -289,6 +298,7 @@ let raw = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => raw += chunk);
 process.stdin.on('end', () => {
+  clearTimeout(watchdog);
   try {
     const config = loadConfig();
     const input = JSON.parse(raw);
