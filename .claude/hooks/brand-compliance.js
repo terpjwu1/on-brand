@@ -13,6 +13,7 @@ const path = require('path');
 function loadConfig() {
   const defaults = {
     mode: 'warn',
+    autoDiscover: true,
     scanOutputDirs: ['dist', 'build', 'out', '.next', 'public'],
     scanRecencyMs: 30000,
     maxFilesToScan: 20
@@ -24,6 +25,7 @@ function loadConfig() {
     const parsed = JSON.parse(raw);
     return {
       mode: ['warn', 'strict'].includes(parsed.mode) ? parsed.mode : 'warn',
+      autoDiscover: parsed.autoDiscover !== false,
       scanOutputDirs: Array.isArray(parsed.scanOutputDirs) ? parsed.scanOutputDirs : defaults.scanOutputDirs,
       scanRecencyMs: Math.min(Math.max(Number(parsed.scanRecencyMs) || 30000, 5000), 120000),
       maxFilesToScan: Math.min(Math.max(Number(parsed.maxFilesToScan) || 20, 1), 100)
@@ -97,68 +99,170 @@ function scanFileForViolations(filePath) {
   }
 }
 
-// --- Recursive directory walker (Node 14+ compatible) ---
-function walkDir(dir, pattern, maxDepth, depth) {
+// --- Constants for discovery ---
+const SKIP_DIRS = new Set(['node_modules', '.git', '.next', '__pycache__', '.venv', '.tox', 'vendor']);
+const BUILD_TOOLS = /\b(tsx|tsc|vite|next\s+build|webpack|esbuild|rollup|parcel|gulp|grunt|astro\s+build)\b/i;
+
+// --- Recursive directory walker (Node 14+ compatible, deadline-aware) ---
+function walkDir(dir, pattern, maxDepth, deadline, depth) {
   if (depth === undefined) depth = 0;
-  if (depth > maxDepth) return [];
+  if (depth > maxDepth || Date.now() > deadline) return [];
   const results = [];
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory() && depth < maxDepth) {
-        results.push(...walkDir(full, pattern, maxDepth, depth + 1));
+      if (Date.now() > deadline) break;
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        if (depth < maxDepth) {
+          const full = path.join(dir, entry.name);
+          results.push(...walkDir(full, pattern, maxDepth, deadline, depth + 1));
+        }
       } else if (entry.isFile() && pattern.test(entry.name)) {
-        results.push(full);
+        results.push(path.join(dir, entry.name));
       }
     }
   } catch (e) { /* skip unreadable dirs */ }
   return results;
 }
 
-// --- Find output files from bash commands ---
-function findOutputFiles(command, stdout, config) {
+// --- Tier 1: Extract file paths from stdout/command ---
+function discoverFromStdout(command, stdout, deadline) {
   const files = [];
+  if (Date.now() > deadline) return files;
 
-  // Extract file paths from command and stdout
-  // Handle: quoted paths, Windows backslashes, drive letters, spaces
+  // Patterns ordered by specificity. Only group 1 is used for quoted paths.
   const pathPatterns = [
-    /["']([^"']+\.(html|css|svg))["']/gi,
-    /(?:[A-Za-z]:\\|\.{0,2}[\\/])[\w\s.\\/\\-]+\.(html|css|svg)/gi,
-    /[\w.\/-]+\.(html|css|svg)/gi
+    { re: /["']([^"']+\.(?:html|css|svg))["']/gi, group: 1 },
+    { re: /(?:[A-Za-z]:\\|\.{0,2}[\\/])[\w\s.\\/\\-]+\.(?:html|css|svg)/gi, group: 0 },
+    { re: /[\w.\/-]+\.(?:html|css|svg)/gi, group: 0 }
   ];
 
   const sources = [command, stdout || ''];
   for (const source of sources) {
-    for (const pattern of pathPatterns) {
+    for (const { re, group } of pathPatterns) {
       let m;
-      while ((m = pattern.exec(source)) !== null) {
-        const p = (m[1] || m[0]).replace(/["']/g, '');
+      while ((m = re.exec(source)) !== null) {
+        if (Date.now() > deadline) return files;
+        const p = (m[group] || m[0]).replace(/["']/g, '');
+        if (p.length < 4) continue; // skip bare extensions
         try {
           const resolved = path.resolve(p);
           if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
             files.push(resolved);
           }
-        } catch (e) { /* skip invalid paths */ }
+        } catch (e) { /* skip */ }
       }
     }
   }
+  return files;
+}
 
-  // Scan common output directories for recently modified files
-  for (const dir of config.scanOutputDirs) {
-    const resolved = path.resolve(dir);
-    if (!resolved.startsWith(process.cwd())) continue; // safety: only relative dirs
-    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
-      const candidates = walkDir(resolved, SCANNABLE_EXTENSIONS, 3);
+// --- Tier 2: Recency scan from CWD (max depth 4) ---
+function discoverByRecency(config, deadline) {
+  const files = [];
+  if (Date.now() > deadline) return files;
+
+  const cwd = process.cwd();
+  const candidates = walkDir(cwd, SCANNABLE_EXTENSIONS, 4, deadline);
+  const now = Date.now();
+
+  for (const file of candidates) {
+    if (Date.now() > deadline) break;
+    try {
+      const stat = fs.statSync(file);
+      if (now - stat.mtimeMs < config.scanRecencyMs) {
+        files.push(file);
+      }
+    } catch (e) { /* skip */ }
+  }
+  return files;
+}
+
+// --- Tier 3: Build-tool heuristic (scan first-level subdirs) ---
+function discoverByBuildHeuristic(command, config, deadline) {
+  const files = [];
+  if (Date.now() > deadline) return files;
+  if (!BUILD_TOOLS.test(command)) return files;
+
+  const cwd = process.cwd();
+  try {
+    const topEntries = fs.readdirSync(cwd, { withFileTypes: true });
+    for (const entry of topEntries) {
+      if (Date.now() > deadline) break;
+      if (!entry.isDirectory()) continue;
+      if (SKIP_DIRS.has(entry.name)) continue;
+      // Skip dirs already covered by scanOutputDirs
+      if (config.scanOutputDirs.includes(entry.name)) continue;
+
+      const subdir = path.join(cwd, entry.name);
+      const candidates = walkDir(subdir, SCANNABLE_EXTENSIONS, 3, deadline);
+      const now = Date.now();
       for (const file of candidates) {
+        if (Date.now() > deadline) break;
         try {
           const stat = fs.statSync(file);
-          if (Date.now() - stat.mtimeMs < config.scanRecencyMs) {
+          if (now - stat.mtimeMs < config.scanRecencyMs) {
             files.push(file);
           }
         } catch (e) { /* skip */ }
       }
     }
+  } catch (e) { /* skip */ }
+  return files;
+}
+
+// --- Tier 4: Fallback — configured scanOutputDirs ---
+function discoverFromConfigDirs(config, deadline) {
+  const files = [];
+  if (Date.now() > deadline) return files;
+
+  for (const dir of config.scanOutputDirs) {
+    if (Date.now() > deadline) break;
+    const resolved = path.resolve(dir);
+    if (!resolved.startsWith(process.cwd())) continue;
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) continue;
+
+    const candidates = walkDir(resolved, SCANNABLE_EXTENSIONS, 3, deadline);
+    const now = Date.now();
+    for (const file of candidates) {
+      if (Date.now() > deadline) break;
+      try {
+        const stat = fs.statSync(file);
+        if (now - stat.mtimeMs < config.scanRecencyMs) {
+          files.push(file);
+        }
+      } catch (e) { /* skip */ }
+    }
+  }
+  return files;
+}
+
+// --- Main discovery orchestrator ---
+function findOutputFiles(command, stdout, config) {
+  const deadline = Date.now() + 4500; // 4.5s hard deadline (timeout is 5s)
+  let files = [];
+
+  // Tier 1: Stdout path extraction (highest confidence — always runs)
+  files.push(...discoverFromStdout(command, stdout, deadline));
+
+  const isBuildCommand = BUILD_TOOLS.test(command) || DOC_GEN_PATTERN.test(command);
+
+  if (config.autoDiscover && isBuildCommand) {
+    // Tier 2: Recency scan — only for build tool commands
+    if (files.length < config.maxFilesToScan && Date.now() < deadline) {
+      files.push(...discoverByRecency(config, deadline));
+    }
+
+    // Tier 3: Build-tool heuristic (widens scan to non-configured subdirs)
+    if (files.length < config.maxFilesToScan && Date.now() < deadline) {
+      files.push(...discoverByBuildHeuristic(command, config, deadline));
+    }
+  }
+
+  // Tier 4: Fallback — configured output dirs (only if nothing found yet)
+  if (files.length === 0 && isBuildCommand && Date.now() < deadline) {
+    files.push(...discoverFromConfigDirs(config, deadline));
   }
 
   return [...new Set(files)];
