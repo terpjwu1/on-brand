@@ -580,15 +580,36 @@ function normalizeToHex(value) {
     const h = hex3[1];
     return (h[0]+h[0]+h[1]+h[1]+h[2]+h[2]).toLowerCase();
   }
-  // rgb(r, g, b) / rgba(r, g, b, a)
+  // rgb(r, g, b) / rgba(r, g, b, a) with bounds validation
   const rgb = value.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
   if (rgb) {
-    const r = parseInt(rgb[1], 10).toString(16).padStart(2, '0');
-    const g = parseInt(rgb[2], 10).toString(16).padStart(2, '0');
-    const b = parseInt(rgb[3], 10).toString(16).padStart(2, '0');
-    return (r + g + b).toLowerCase();
+    const r = Math.min(255, Math.max(0, parseInt(rgb[1], 10)));
+    const g = Math.min(255, Math.max(0, parseInt(rgb[2], 10)));
+    const b = Math.min(255, Math.max(0, parseInt(rgb[3], 10)));
+    return (r.toString(16).padStart(2, '0') + g.toString(16).padStart(2, '0') + b.toString(16).padStart(2, '0')).toLowerCase();
   }
   return null;
+}
+
+// Extract ALL colors from a value string (for multi-color declarations like gradients)
+function extractAllColors(value) {
+  const colors = [];
+  const hex6Regex = /#([0-9a-fA-F]{6})\b/g;
+  const hex3Regex = /#([0-9a-fA-F]{3})\b/g;
+  const rgbRegex = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/g;
+  let m;
+  while ((m = hex6Regex.exec(value)) !== null) colors.push(m[1].toLowerCase());
+  while ((m = hex3Regex.exec(value)) !== null) {
+    const h = m[1];
+    colors.push((h[0]+h[0]+h[1]+h[1]+h[2]+h[2]).toLowerCase());
+  }
+  while ((m = rgbRegex.exec(value)) !== null) {
+    const r = Math.min(255, Math.max(0, parseInt(m[1], 10)));
+    const g = Math.min(255, Math.max(0, parseInt(m[2], 10)));
+    const b = Math.min(255, Math.max(0, parseInt(m[3], 10)));
+    colors.push((r.toString(16).padStart(2, '0') + g.toString(16).padStart(2, '0') + b.toString(16).padStart(2, '0')).toLowerCase());
+  }
+  return colors;
 }
 
 // --- Checker: Color Pairings (text-on-background) ---
@@ -811,12 +832,15 @@ function checkColorProportions(ctx) {
       const value = propMatch[2].trim();
       const propWeight = getPropertyWeight(prop);
       if (propWeight === 0) continue;
-      const inlineHex = normalizeToHex(value);
-      if (!inlineHex) continue;
-      const scorePerColor = 3 * propWeight; // inline weight = 3
-      totalScore += scorePerColor;
-      const group = getGroup(inlineHex);
-      if (group) scores[group] += scorePerColor;
+      // Extract ALL colors (handles inline gradients)
+      const inlineColors = extractAllColors(value);
+      if (inlineColors.length === 0) continue;
+      const scorePerColor = (3 * propWeight) / inlineColors.length;
+      for (const hex of inlineColors) {
+        totalScore += scorePerColor;
+        const group = getGroup(hex);
+        if (group) scores[group] += scorePerColor;
+      }
     }
   }
 
