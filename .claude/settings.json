@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/brand-compliance.js",
+            "command": "node .claude/hooks/brand-compliance.cjs",
             "timeout": 3
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/brand-compliance.js",
+            "command": "node .claude/hooks/brand-compliance.cjs",
             "timeout": 5
           }
         ]

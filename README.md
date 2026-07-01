@@ -26,7 +26,7 @@ This ensures every generated artifact stays on-brand without manual checking.
 
 Copy these into your project:
 
-1. `.claude/hooks/brand-compliance.js` → your project's `.claude/hooks/`
+1. `.claude/hooks/brand-compliance.cjs` → your project's `.claude/hooks/`
 2. `.claude/settings.json` → your project's `.claude/` (merge if one exists)
 3. `DESIGN.md` → your project root
 
@@ -37,7 +37,7 @@ your-project/
 ├── .claude/
 │   ├── settings.json          ← registers the hook with Claude Code
 │   └── hooks/
-│       └── brand-compliance.js  ← the checker (Node.js, cross-platform)
+│       └── brand-compliance.cjs  ← the checker (Node.js, cross-platform)
 └── DESIGN.md                  ← Perficient brand tokens + rationale
 ```
 
@@ -56,7 +56,7 @@ your-project/
 
 ## Customizing
 
-Edit `.claude/hooks/brand-compliance.js` to adjust:
+Edit `.claude/hooks/brand-compliance.cjs` to adjust:
 - `VISUAL_EXTENSIONS` — which file types trigger the check
 - `DOC_GEN_PATTERN` — which bash output patterns trigger the check
 - The `message` string — what brand rules are shown

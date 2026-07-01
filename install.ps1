@@ -1,13 +1,13 @@
 # Perficient Brand Compliance Hook — Installer (Windows PowerShell)
-# Usage: .\install.ps1 [-Target <directory>] [-Strict]
+# Usage: .\install.ps1 [-Target <directory>] [-Loose]
 #
 # Installs the brand compliance hook + DESIGN.md into a target project.
-# If no target is specified, installs into the current directory.
-# Pass -Strict to enable blocking mode (violations prevent writes).
+# Default mode is STRICT (blocks on violations).
+# Pass -Loose for advisory-only mode (warns but doesn't block).
 
 param(
     [string]$Target = ".",
-    [switch]$Strict
+    [switch]$Loose
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,7 +23,7 @@ try {
     exit 1
 }
 
-$modeLabel = if ($Strict) { "strict (blocking)" } else { "warn (advisory)" }
+$modeLabel = if ($Loose) { "strict (blocking)" } else { "warn (advisory)" }
 Write-Host "🎨 Perficient Brand Compliance Hook Installer" -ForegroundColor Cyan
 Write-Host "   Target: $Target"
 Write-Host "   Mode:   $modeLabel"
@@ -36,20 +36,20 @@ if (-not (Test-Path $HooksDir)) {
 }
 
 # 2. Copy hook script
-Copy-Item (Join-Path $ScriptDir ".claude\hooks\brand-compliance.js") (Join-Path $HooksDir "brand-compliance.js") -Force
-Write-Host "✓ Copied brand-compliance.js" -ForegroundColor Green
+Copy-Item (Join-Path $ScriptDir ".claude\hooks\brand-compliance.cjs") (Join-Path $HooksDir "brand-compliance.cjs") -Force
+Write-Host "✓ Copied brand-compliance.cjs" -ForegroundColor Green
 
-# 3. Copy config (set mode based on -Strict flag)
+# 3. Copy config (set mode based on -Loose flag)
 $ConfigSource = Join-Path $ScriptDir ".claude\hooks\brand-compliance.config.json"
 $ConfigDest = Join-Path $HooksDir "brand-compliance.config.json"
-if ($Strict) {
+if ($Loose) {
     $config = Get-Content $ConfigSource -Raw | ConvertFrom-Json
-    $config.mode = "strict"
+    $config.mode = "warn"
     $config | ConvertTo-Json -Depth 5 | Set-Content $ConfigDest -Encoding UTF8
 } else {
     Copy-Item $ConfigSource $ConfigDest -Force
 }
-$modeStr = if ($Strict) { "strict" } else { "warn" }
+$modeStr = if ($Loose) { "strict" } else { "warn" }
 Write-Host "✓ Copied brand-compliance.config.json (mode: $modeStr)" -ForegroundColor Green
 
 # 4. Merge or create settings.json
@@ -64,7 +64,7 @@ if (Test-Path $SettingsPath) {
     function Test-HookInstalled($arr) {
         foreach ($entry in $arr) {
             foreach ($hook in $entry.hooks) {
-                if ($hook.command -and $hook.command -like "*brand-compliance.js*") {
+                if ($hook.command -and $hook.command -like "*brand-compliance.cjs*") {
                     return $true
                 }
             }
@@ -72,8 +72,8 @@ if (Test-Path $SettingsPath) {
         return $false
     }
 
-    $hookEntryPre = @{ matcher = "Write|Edit|MultiEdit|Bash"; hooks = @(@{ type = "command"; command = "node .claude/hooks/brand-compliance.js"; timeout = 3 }) }
-    $hookEntryPost = @{ matcher = "Write|Edit|MultiEdit|Bash"; hooks = @(@{ type = "command"; command = "node .claude/hooks/brand-compliance.js"; timeout = 5 }) }
+    $hookEntryPre = @{ matcher = "Write|Edit|MultiEdit|Bash"; hooks = @(@{ type = "command"; command = "node .claude/hooks/brand-compliance.cjs"; timeout = 3 }) }
+    $hookEntryPost = @{ matcher = "Write|Edit|MultiEdit|Bash"; hooks = @(@{ type = "command"; command = "node .claude/hooks/brand-compliance.cjs"; timeout = 5 }) }
 
     if (-not $settings.hooks.PreToolUse) {
         $settings.hooks | Add-Member -NotePropertyName "PreToolUse" -NotePropertyValue @() -Force
