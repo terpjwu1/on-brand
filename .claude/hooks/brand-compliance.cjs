@@ -674,11 +674,19 @@ function checkColorPairings(ctx) {
     }
   }
 
-  // Raw content check: catch inline styles and patterns the CSS parser misses
-  const inlinePoppyText = /style=["'][^"']*color\s*:\s*#fe3a39/gi;
-  if (inlinePoppyText.test(content)) {
-    if (!violations.some(v => v.includes('Poppy') && v.includes('inline'))) {
-      violations.push('[color-pairings] Inline style uses Poppy (#FE3A39) as text color — Poppy is shape/fill only, never text');
+  // Raw content check: catch inline styles the CSS parser misses
+  // Poppy as text in any format (hex, rgb, 3-digit)
+  const inlinePoppyPatterns = [
+    /style=["'][^"']*color\s*:\s*#fe3a39/gi,
+    /style=["'][^"']*color\s*:\s*#f33/gi,
+    /style=["'][^"']*color\s*:\s*rgb\(\s*254\s*,\s*58\s*,\s*57/gi,
+  ];
+  for (const pattern of inlinePoppyPatterns) {
+    if (pattern.test(content)) {
+      if (!violations.some(v => v.includes('Poppy') && v.includes('inline'))) {
+        violations.push('[color-pairings] Inline style uses Poppy as text color — Poppy is shape/fill only, never text');
+      }
+      break;
     }
   }
 
@@ -716,8 +724,16 @@ function checkColorProportions(ctx) {
     return 3; // default for class-only selectors
   }
 
-  // Property weight lookup
+  // Property weight lookup (only visual color-bearing properties)
+  const VISUAL_PROPS = new Set([
+    'background', 'background-color', 'color', 'fill', 'stroke',
+    'border-color', 'border-left-color', 'border-right-color',
+    'border-top-color', 'border-bottom-color', 'border-left',
+    'border-right', 'border-top', 'border-bottom', 'border',
+    'outline-color', 'box-shadow', 'text-decoration-color'
+  ]);
   function getPropertyWeight(prop) {
+    if (!VISUAL_PROPS.has(prop)) return 0; // skip non-visual props (content, etc.)
     if (prop === 'background' || prop === 'background-color') return 5;
     if (prop === 'fill' || prop === 'stroke') return 3;
     if (prop === 'color') return 2;
@@ -774,12 +790,33 @@ function checkColorProportions(ctx) {
       const scorePerColor = (selWeight * propWeight) / hexes.length;
 
       for (const hex of hexes) {
+        totalScore += scorePerColor; // always count toward total (even unrecognized)
         const group = getGroup(hex);
         if (group) {
           scores[group] += scorePerColor;
-          totalScore += scorePerColor;
         }
       }
+    }
+  }
+
+  // Also scan inline style attributes (weight 3 — between element and section)
+  const inlineStyleRegex = /style=["']([^"']+)["']/gi;
+  let inlineMatch;
+  while ((inlineMatch = inlineStyleRegex.exec(content)) !== null) {
+    const styleStr = inlineMatch[1];
+    const propRegex = /([\w-]+)\s*:\s*([^;]+)/g;
+    let propMatch;
+    while ((propMatch = propRegex.exec(styleStr)) !== null) {
+      const prop = propMatch[1].toLowerCase();
+      const value = propMatch[2].trim();
+      const propWeight = getPropertyWeight(prop);
+      if (propWeight === 0) continue;
+      const inlineHex = normalizeToHex(value);
+      if (!inlineHex) continue;
+      const scorePerColor = 3 * propWeight; // inline weight = 3
+      totalScore += scorePerColor;
+      const group = getGroup(inlineHex);
+      if (group) scores[group] += scorePerColor;
     }
   }
 
