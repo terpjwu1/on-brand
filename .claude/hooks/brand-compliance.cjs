@@ -61,23 +61,55 @@ function loadConfig() {
 // --- Constants ---
 const VISUAL_EXTENSIONS = /\.(html|css|scss|less|tsx|jsx|vue|svelte|svg|pptx|ppt|pdf|docx|doc|xlsx)$/i;
 const DOC_GEN_PATTERN = /\.(pptx|pdf|docx|xlsx|ppt|doc)\b/i;
+const PRESENTATION_PATTERN = /\.(pptx|ppt)\b/i;
 const SCANNABLE_EXTENSIONS = /\.(html|css|scss|less|svg)$/i;
 
-// --- Brand constants ---
-const APPROVED_COLORS = new Set([
+// --- Format detection ---
+function detectContext(filePath, command) {
+  if (PRESENTATION_PATTERN.test(filePath || '')) return 'presentation';
+  if (command && PRESENTATION_PATTERN.test(command)) return 'presentation';
+  if (command && /powerpoint|pptx|slide/i.test(command)) return 'presentation';
+  return 'web';
+}
+
+// --- Brand constants (web context) ---
+const WEB_APPROVED_COLORS = new Set([
   '075056', '024879', '71d8c5', '1b2227', 'fe3a39',
   'c5dcee', 'dfe7ed', '5d798f', 'fe6b64', '4ab3e9',
   '324eb5', '001a6e', '6f1d82', 'ffffff',
   'aacbe4', 'def0ff', 'eef7ff'
 ]);
 
-const APPROVED_HEADING_COLORS = new Set(['1b2227', 'ffffff', '075056']);
+// --- Brand constants (presentation context) ---
+const PRESENTATION_APPROVED_COLORS = new Set([
+  ...WEB_APPROVED_COLORS,
+  'e6eff6' // Presentation Light Grey (card fills, alternating rows)
+]);
 
-const PRIMARY_FONTS = ['fk screamer legacy', 'noe display', 'untitled sans'];
+const WEB_PRIMARY_FONTS = ['fk screamer legacy', 'noe display', 'untitled sans'];
+const PRESENTATION_PRIMARY_FONTS = [
+  'fk screamer legacy', 'noe display', 'untitled sans',
+  // Fallback fonts allowed as primary in presentations (users may not have brand fonts installed)
+  'georgia', 'times new roman', 'arial', 'helvetica neue',
+  'franklin gothic demi cond', 'aptos',
+  'dm mono', 'ibm plex mono', 'courier'
+];
+
 const FALLBACK_FONTS = new Set([
   'serif', 'sans-serif', 'system-ui', '-apple-system', 'blinkmacsystemfont',
-  'arial', 'arial narrow', 'helvetica neue', 'georgia', 'times new roman', 'monospace'
+  'arial', 'arial narrow', 'helvetica neue', 'georgia', 'times new roman',
+  'monospace', 'courier', 'courier new'
 ]);
+
+// Context-dependent getters
+function getApprovedColors(context) {
+  return context === 'presentation' ? PRESENTATION_APPROVED_COLORS : WEB_APPROVED_COLORS;
+}
+function getPrimaryFonts(context) {
+  return context === 'presentation' ? PRESENTATION_PRIMARY_FONTS : WEB_PRIMARY_FONTS;
+}
+
+const APPROVED_HEADING_COLORS = new Set(['1b2227', 'ffffff', '075056']);
 
 const BODY_SELECTORS = /\b(body|^p$|^li$|^td$|^th$|\.body|\.copy|\.content|\.description|\.text)\b/i;
 const SKIP_BODY_SELECTORS = /\.(muted|caption|meta|disabled|icon|badge|tag|label)/i;
@@ -109,7 +141,8 @@ function parseCssBlocks(content) {
 
 // --- Checker: Core Tokens ---
 function checkCoreTokens(ctx) {
-  const { content } = ctx;
+  const { content, context } = ctx;
+  const approvedColors = getApprovedColors(context);
   const violations = [];
 
   if (/(?:color|background|border|fill|stroke)\s*:\s*#000000\b/i.test(content) ||
@@ -122,7 +155,7 @@ function checkCoreTokens(ctx) {
   let match;
   while ((match = hexRegex.exec(content)) !== null) {
     const color = match[1].toLowerCase();
-    if (!APPROVED_COLORS.has(color)) {
+    if (!approvedColors.has(color)) {
       badColors.add('#' + match[1]);
     }
   }
@@ -181,8 +214,11 @@ function checkGrayBodyText(ctx) {
 
 // --- Checker: Sidebar Bars ---
 function checkSidebarBars(ctx) {
-  const { cssBlocks } = ctx;
+  const { cssBlocks, context } = ctx;
   const violations = [];
+
+  // In presentations, left-accent borders with Poppy are a brand motif
+  if (context === 'presentation') return violations;
 
   for (const block of cssBlocks) {
     if (TABLE_SELECTORS.test(block.selector)) continue;
@@ -207,8 +243,12 @@ function checkSidebarBars(ctx) {
 
 // --- Checker: Card Backgrounds ---
 function checkCardBackgrounds(ctx) {
-  const { cssBlocks } = ctx;
+  const { cssBlocks, context } = ctx;
   const violations = [];
+
+  // Presentation context allows Light Grey (#E6EFF6) for card fills
+  const allowedBgs = new Set(['ffffff']);
+  if (context === 'presentation') allowedBgs.add('e6eff6');
 
   for (const block of cssBlocks) {
     if (!CARD_SELECTORS.test(block.selector)) continue;
@@ -220,11 +260,11 @@ function checkCardBackgrounds(ctx) {
       const hexMatch = value.match(/#([0-9a-fA-F]{6})\b/);
       if (hexMatch) {
         const color = hexMatch[1].toLowerCase();
-        if (color !== 'ffffff') {
-          violations.push(`[card-backgrounds] Non-white background #${color} on "${block.selector}" — cards should be white`);
+        if (!allowedBgs.has(color)) {
+          violations.push(`[card-backgrounds] Non-white background #${color} on "${block.selector}" — cards should be white${context === 'presentation' ? ' or Light Grey (#E6EFF6)' : ''}`);
         }
       } else if (/linear-gradient/i.test(value)) {
-        violations.push(`[card-backgrounds] Gradient background on "${block.selector}" — cards should be white (gradients only for hero/banner)`);
+        violations.push(`[card-backgrounds] Gradient background on "${block.selector}" — ${context === 'presentation' ? 'presentations must be flat, no gradients' : 'cards should be white (gradients only for hero/banner)'}`);
       }
     }
   }
@@ -234,7 +274,8 @@ function checkCardBackgrounds(ctx) {
 
 // --- Checker: Font Families ---
 function checkFontFamilies(ctx) {
-  const { cssBlocks } = ctx;
+  const { cssBlocks, context } = ctx;
+  const primaryFonts = getPrimaryFonts(context);
   const violations = [];
   const flaggedFonts = new Set();
 
@@ -247,7 +288,7 @@ function checkFontFamilies(ctx) {
 
       const primary = fonts[0].toLowerCase();
 
-      if (PRIMARY_FONTS.includes(primary)) continue;
+      if (primaryFonts.includes(primary)) continue;
       if (FALLBACK_FONTS.has(primary) && fonts.length === 1) {
         if (!flaggedFonts.has(primary)) {
           flaggedFonts.add(primary);
@@ -259,7 +300,7 @@ function checkFontFamilies(ctx) {
 
       if (!flaggedFonts.has(primary)) {
         flaggedFonts.add(primary);
-        violations.push(`[font-families] Primary font "${fonts[0]}" is not approved — use FK Screamer Legacy/Noe Display/Untitled Sans`);
+        violations.push(`[font-families] Primary font "${fonts[0]}" is not approved — use FK Screamer Legacy/Noe Display/Untitled Sans${context === 'presentation' ? ' or their presentation fallbacks (Georgia, Arial, Franklin Gothic Demi Cond)' : ''}`);
       }
     }
   }
@@ -545,15 +586,16 @@ const CHECKERS = [
 ];
 
 // --- Violation scanner (orchestrator) ---
-function scanFileForViolations(filePath, config) {
+function scanFileForViolations(filePath, config, command) {
   try {
     if (!fs.existsSync(filePath)) return { strict: [], advisory: [] };
     const stat = fs.statSync(filePath);
     if (stat.size > 1024 * 1024) return { strict: [], advisory: [] };
     const content = fs.readFileSync(filePath, 'utf8');
 
+    const context = detectContext(filePath, command);
     const cssBlocks = parseCssBlocks(content);
-    const ctx = { content, cssBlocks, filePath };
+    const ctx = { content, cssBlocks, filePath, context };
 
     const checkerConfig = config.checkers || {};
     const strict = [];
@@ -842,8 +884,9 @@ process.stdin.on('end', () => {
         const allStrict = [];
         const allAdvisory = [];
 
+        const bashCommand = input.tool_input?.command || '';
         for (const file of capped) {
-          const { strict, advisory } = scanFileForViolations(file, config);
+          const { strict, advisory } = scanFileForViolations(file, config, bashCommand);
           const relFile = path.relative(process.cwd(), file);
           if (strict.length > 0) allStrict.push({ file: relFile, violations: strict });
           if (advisory.length > 0) allAdvisory.push({ file: relFile, violations: advisory });
