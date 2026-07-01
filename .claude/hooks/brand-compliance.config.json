@@ -1,0 +1,12 @@
+{
+  "mode": "warn",
+  "scanOutputDirs": [
+    "dist",
+    "build",
+    "out",
+    ".next",
+    "public"
+  ],
+  "scanRecencyMs": 30000,
+  "maxFilesToScan": 20
+}
