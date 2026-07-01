@@ -569,6 +569,84 @@ function checkGradientUsage(ctx) {
   return violations;
 }
 
+// --- Checker: Color Pairings (text-on-background) ---
+function checkColorPairings(ctx) {
+  const { cssBlocks, content } = ctx;
+  const violations = [];
+
+  // Background class → hex mapping
+  const BG_CLASSES = {
+    'bg-spruce': '075056', 'bg-navy': '024879', 'bg-black': '1b2227',
+    'bg-white': 'ffffff', 'bg-light': 'dfe7ed', 'bg-sky': 'c5dcee'
+  };
+
+  // Forbidden text colors per background (lowercase hex, no #)
+  const FORBIDDEN_TEXT = {
+    '075056': new Set(['c5dcee']), // Sky on Spruce = banned
+    '024879': new Set(['1b2227', '075056', '71d8c5']), // Black, Spruce, Turquoise on Navy
+    '1b2227': new Set(['075056', '024879']), // Spruce, Navy on Black
+    'ffffff': new Set(['71d8c5', '4ab3e9', 'fe3a39', '324eb5']), // Turquoise, Capri, Poppy, Cobalt on White
+    'dfe7ed': new Set(['71d8c5', '4ab3e9', 'fe3a39', '324eb5']), // Same as White
+    'c5dcee': new Set(['71d8c5', '4ab3e9', '324eb5', 'fe3a39']), // Turquoise, Capri, Cobalt, Poppy on Sky
+  };
+
+  // Poppy is NEVER text on any surface
+  const POPPY = 'fe3a39';
+
+  // Check CSS blocks for background + color combinations
+  for (const block of cssBlocks) {
+    let bgColor = null;
+
+    // Detect background from class name in selector
+    for (const [cls, hex] of Object.entries(BG_CLASSES)) {
+      if (block.selector.includes(cls)) {
+        bgColor = hex;
+        break;
+      }
+    }
+
+    // Detect background from properties
+    if (!bgColor) {
+      for (const { prop, value } of block.properties) {
+        if (prop === 'background-color' || prop === 'background') {
+          const hexMatch = value.match(/#([0-9a-fA-F]{6})\b/);
+          if (hexMatch) bgColor = hexMatch[1].toLowerCase();
+        }
+      }
+    }
+
+    // Check text colors against the background
+    for (const { prop, value } of block.properties) {
+      if (prop !== 'color') continue;
+      const hexMatch = value.match(/#([0-9a-fA-F]{6})\b/);
+      if (!hexMatch) continue;
+      const textColor = hexMatch[1].toLowerCase();
+
+      // Poppy is never text
+      if (textColor === POPPY) {
+        violations.push(`[color-pairings] Poppy (#FE3A39) used as text color on "${block.selector}" — Poppy is shape/fill only, never text`);
+        continue;
+      }
+
+      // Check against background-specific forbidden list
+      if (bgColor && FORBIDDEN_TEXT[bgColor] && FORBIDDEN_TEXT[bgColor].has(textColor)) {
+        const bgName = Object.entries(BG_CLASSES).find(([, v]) => v === bgColor)?.[0] || `#${bgColor}`;
+        violations.push(`[color-pairings] #${textColor} text on ${bgName} background ("${block.selector}") — forbidden pairing per brand rules`);
+      }
+    }
+  }
+
+  // Direct check: Sky (#C5DCEE) text inside a Spruce context (the #1 brand-team red line)
+  const skyOnSpruce = /\.bg-spruce[^{]*\{[^}]*color\s*:\s*#c5dcee/i;
+  if (skyOnSpruce.test(content)) {
+    if (!violations.some(v => v.includes('c5dcee') && v.includes('spruce'))) {
+      violations.push('[color-pairings] Sky text on Blue Spruce background — banned (brand-team red line). Use White or Turquoise instead.');
+    }
+  }
+
+  return violations;
+}
+
 // --- Checker registry ---
 const CHECKERS = [
   { id: 'core-tokens', fn: checkCoreTokens, strictCapable: true },
@@ -582,6 +660,7 @@ const CHECKERS = [
   { id: 'icon-color', fn: checkIconColorPairing, strictCapable: true },
   { id: 'spacing', fn: checkSpacing, strictCapable: true },
   { id: 'gradient-usage', fn: checkGradientUsage, strictCapable: true },
+  { id: 'color-pairings', fn: checkColorPairings, strictCapable: true },
   { id: 'layout-busyness', fn: checkLayoutBusyness, strictCapable: false },
 ];
 
