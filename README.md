@@ -126,6 +126,19 @@ your-project/
 - Node.js (already required by Claude Code)
 - No plugins needed
 
+## Compatibility
+
+| Platform | Status |
+|----------|--------|
+| macOS | Tested |
+| Linux | Untested (should work — pure Node.js) |
+| Windows | Untested (architecture is cross-platform but not yet verified) |
+
+| AI Agent | Status |
+|----------|--------|
+| Claude Code | Tested |
+| Codex / Cursor / Other | Untested (hook system is Claude Code-specific)
+
 ## Updating
 
 Re-run the install command to get the latest version. It will overwrite the hook script and config while preserving your existing `.claude/settings.json` hooks.
