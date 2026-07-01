@@ -137,7 +137,10 @@ your-project/
 | AI Agent | Status |
 |----------|--------|
 | Claude Code | Tested |
-| Codex / Cursor / Other | Untested (hook system is Claude Code-specific)
+| Codex CLI | Untested (hook system is Claude Code-specific) |
+| Cursor | Untested (hook system is Claude Code-specific) |
+| Copilot CLI | Untested (hook system is Claude Code-specific) |
+| Cortex Code | Untested (hook system is Claude Code-specific)
 
 ## Updating
 
