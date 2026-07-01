@@ -16,6 +16,8 @@
     "icon-color": true,
     "spacing": true,
     "gradient-usage": true,
+    "color-pairings": true,
+    "color-proportions": true,
     "layout-busyness": true
   }
 }

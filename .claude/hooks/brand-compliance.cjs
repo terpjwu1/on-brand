@@ -569,6 +569,28 @@ function checkGradientUsage(ctx) {
   return violations;
 }
 
+// --- Color normalization helper (hex, rgb, 3-digit hex) ---
+function normalizeToHex(value) {
+  // 6-digit hex
+  const hex6 = value.match(/#([0-9a-fA-F]{6})\b/);
+  if (hex6) return hex6[1].toLowerCase();
+  // 3-digit hex
+  const hex3 = value.match(/#([0-9a-fA-F]{3})\b/);
+  if (hex3) {
+    const h = hex3[1];
+    return (h[0]+h[0]+h[1]+h[1]+h[2]+h[2]).toLowerCase();
+  }
+  // rgb(r, g, b) / rgba(r, g, b, a)
+  const rgb = value.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (rgb) {
+    const r = parseInt(rgb[1], 10).toString(16).padStart(2, '0');
+    const g = parseInt(rgb[2], 10).toString(16).padStart(2, '0');
+    const b = parseInt(rgb[3], 10).toString(16).padStart(2, '0');
+    return (r + g + b).toLowerCase();
+  }
+  return null;
+}
+
 // --- Checker: Color Pairings (text-on-background) ---
 function checkColorPairings(ctx) {
   const { cssBlocks, content } = ctx;
@@ -580,6 +602,15 @@ function checkColorPairings(ctx) {
     'bg-white': 'ffffff', 'bg-light': 'dfe7ed', 'bg-sky': 'c5dcee'
   };
 
+  // Word-boundary class matching (fixes substring false-positives)
+  function matchesBgClass(selector) {
+    for (const [cls, hex] of Object.entries(BG_CLASSES)) {
+      const regex = new RegExp(`\\.${cls}(?:\\s|\\.|#|>|\\+|~|:|\\[|,|$)`);
+      if (regex.test(selector)) return hex;
+    }
+    return null;
+  }
+
   // Forbidden text colors per background (lowercase hex, no #)
   const FORBIDDEN_TEXT = {
     '075056': new Set(['c5dcee']), // Sky on Spruce = banned
@@ -590,27 +621,21 @@ function checkColorPairings(ctx) {
     'c5dcee': new Set(['71d8c5', '4ab3e9', '324eb5', 'fe3a39']), // Turquoise, Capri, Cobalt, Poppy on Sky
   };
 
-  // Poppy is NEVER text on any surface
   const POPPY = 'fe3a39';
 
   // Check CSS blocks for background + color combinations
   for (const block of cssBlocks) {
     let bgColor = null;
 
-    // Detect background from class name in selector
-    for (const [cls, hex] of Object.entries(BG_CLASSES)) {
-      if (block.selector.includes(cls)) {
-        bgColor = hex;
-        break;
-      }
-    }
+    // Detect background from class name in selector (word-boundary match)
+    bgColor = matchesBgClass(block.selector);
 
-    // Detect background from properties
+    // Detect background from properties (last one wins)
     if (!bgColor) {
       for (const { prop, value } of block.properties) {
         if (prop === 'background-color' || prop === 'background') {
-          const hexMatch = value.match(/#([0-9a-fA-F]{6})\b/);
-          if (hexMatch) bgColor = hexMatch[1].toLowerCase();
+          const hex = normalizeToHex(value);
+          if (hex) bgColor = hex;
         }
       }
     }
@@ -618,9 +643,8 @@ function checkColorPairings(ctx) {
     // Check text colors against the background
     for (const { prop, value } of block.properties) {
       if (prop !== 'color') continue;
-      const hexMatch = value.match(/#([0-9a-fA-F]{6})\b/);
-      if (!hexMatch) continue;
-      const textColor = hexMatch[1].toLowerCase();
+      const textColor = normalizeToHex(value);
+      if (!textColor) continue;
 
       // Poppy is never text
       if (textColor === POPPY) {
@@ -636,11 +660,25 @@ function checkColorPairings(ctx) {
     }
   }
 
-  // Direct check: Sky (#C5DCEE) text inside a Spruce context (the #1 brand-team red line)
-  const skyOnSpruce = /\.bg-spruce[^{]*\{[^}]*color\s*:\s*#c5dcee/i;
-  if (skyOnSpruce.test(content)) {
-    if (!violations.some(v => v.includes('c5dcee') && v.includes('spruce'))) {
-      violations.push('[color-pairings] Sky text on Blue Spruce background — banned (brand-team red line). Use White or Turquoise instead.');
+  // Descendant check: any selector containing .bg-spruce ancestor with Sky color
+  for (const block of cssBlocks) {
+    if (!/\.bg-spruce(?:\s|\.|\#|>|\+|~|:|,|$)/.test(block.selector)) continue;
+    for (const { prop, value } of block.properties) {
+      if (prop !== 'color') continue;
+      const textColor = normalizeToHex(value);
+      if (textColor === 'c5dcee') {
+        if (!violations.some(v => v.includes('c5dcee') && v.includes(block.selector))) {
+          violations.push(`[color-pairings] Sky text (#C5DCEE) inside .bg-spruce context ("${block.selector}") — banned (brand-team red line). Use White or Turquoise.`);
+        }
+      }
+    }
+  }
+
+  // Raw content check: catch inline styles and patterns the CSS parser misses
+  const inlinePoppyText = /style=["'][^"']*color\s*:\s*#fe3a39/gi;
+  if (inlinePoppyText.test(content)) {
+    if (!violations.some(v => v.includes('Poppy') && v.includes('inline'))) {
+      violations.push('[color-pairings] Inline style uses Poppy (#FE3A39) as text color — Poppy is shape/fill only, never text');
     }
   }
 
@@ -707,12 +745,27 @@ function checkColorProportions(ctx) {
       const propWeight = getPropertyWeight(prop);
       if (propWeight === 0) continue;
 
-      // Extract all hex colors from this declaration
+      // Extract all colors from this declaration (hex, rgb, shorthand)
       const hexes = [];
-      const hexRegex = /#([0-9a-fA-F]{6})\b/g;
+      // 6-digit hex
+      const hex6Regex = /#([0-9a-fA-F]{6})\b/g;
       let m;
-      while ((m = hexRegex.exec(value)) !== null) {
+      while ((m = hex6Regex.exec(value)) !== null) {
         hexes.push(m[1].toLowerCase());
+      }
+      // 3-digit hex
+      const hex3Regex = /#([0-9a-fA-F]{3})\b/g;
+      while ((m = hex3Regex.exec(value)) !== null) {
+        const h = m[1];
+        hexes.push((h[0]+h[0]+h[1]+h[1]+h[2]+h[2]).toLowerCase());
+      }
+      // rgb/rgba
+      const rgbRegex = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/g;
+      while ((m = rgbRegex.exec(value)) !== null) {
+        const r = parseInt(m[1], 10).toString(16).padStart(2, '0');
+        const g = parseInt(m[2], 10).toString(16).padStart(2, '0');
+        const b = parseInt(m[3], 10).toString(16).padStart(2, '0');
+        hexes.push((r + g + b).toLowerCase());
       }
 
       if (hexes.length === 0) continue;
