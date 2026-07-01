@@ -131,7 +131,11 @@ function walkDir(dir, pattern, maxDepth, deadline, depth) {
         results.push(path.join(dir, entry.name));
       }
     }
-  } catch (e) { /* skip unreadable dirs */ }
+  } catch (e) {
+    if (e.code !== 'EACCES' && e.code !== 'EPERM') {
+      process.stderr.write(`brand-compliance: walkDir error in ${dir}: ${e.message}\n`);
+    }
+  }
   return results;
 }
 
@@ -183,7 +187,9 @@ function discoverByRecency(config, deadline) {
       if (now - stat.mtimeMs < config.scanRecencyMs) {
         files.push(file);
       }
-    } catch (e) { /* skip */ }
+    } catch (e) {
+      process.stderr.write(`brand-compliance: stat error on ${file}: ${e.message}\n`);
+    }
   }
   return files;
 }
@@ -201,7 +207,6 @@ function discoverByBuildHeuristic(command, config, deadline) {
       if (Date.now() > deadline) break;
       if (!entry.isDirectory()) continue;
       if (SKIP_DIRS.has(entry.name)) continue;
-      // Skip dirs already covered by scanOutputDirs
       if (config.scanOutputDirs.includes(entry.name)) continue;
 
       const subdir = path.join(cwd, entry.name);
@@ -214,10 +219,14 @@ function discoverByBuildHeuristic(command, config, deadline) {
           if (now - stat.mtimeMs < config.scanRecencyMs) {
             files.push(file);
           }
-        } catch (e) { /* skip */ }
+        } catch (e) {
+          process.stderr.write(`brand-compliance: stat error on ${file}: ${e.message}\n`);
+        }
       }
     }
-  } catch (e) { /* skip */ }
+  } catch (e) {
+    process.stderr.write(`brand-compliance: heuristic scan error: ${e.message}\n`);
+  }
   return files;
 }
 
@@ -241,7 +250,9 @@ function discoverFromConfigDirs(config, deadline) {
         if (now - stat.mtimeMs < config.scanRecencyMs) {
           files.push(file);
         }
-      } catch (e) { /* skip */ }
+      } catch (e) {
+        process.stderr.write(`brand-compliance: stat error on ${file}: ${e.message}\n`);
+      }
     }
   }
   return files;
