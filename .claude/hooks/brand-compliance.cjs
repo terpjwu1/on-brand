@@ -1141,6 +1141,12 @@ process.stdin.on('end', () => {
   try {
     const config = loadConfig();
     const input = JSON.parse(raw);
+
+    // Debug: log raw stdin to stderr when BRAND_HOOK_DEBUG=1
+    if (process.env.BRAND_HOOK_DEBUG === '1') {
+      process.stderr.write('brand-compliance DEBUG stdin: ' + JSON.stringify(input, null, 2).slice(0, 2000) + '\n');
+    }
+
     const toolName = input.tool_name || input.toolName || '';
     const hookEvent = input.hook_event_name || input.hook_event || input.hookEvent || '';
 
@@ -1187,8 +1193,12 @@ process.stdin.on('end', () => {
 
       if (toolName === 'Bash') {
         const command = input.tool_input?.command || '';
-        const toolResponse = input.tool_response || input.tool_output || {};
-        const stdout = toolResponse.stdout || input.stdout || '';
+        // tool_response is the tool's output — may be a string (raw stdout)
+        // or an object with .stdout/.stderr fields depending on version
+        const rawResponse = input.tool_response || '';
+        const stdout = typeof rawResponse === 'string'
+          ? rawResponse
+          : (rawResponse.stdout || rawResponse.output || JSON.stringify(rawResponse));
         filesToScan = findOutputFiles(command, stdout, config);
       }
 
