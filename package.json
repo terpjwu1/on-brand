@@ -1,0 +1,19 @@
+{
+  "name": "prft-brand-hook",
+  "version": "1.0.0",
+  "description": "Perficient brand compliance hook for Claude Code",
+  "bin": {
+    "prft-brand-hook": "./bin/install.cjs"
+  },
+  "files": [
+    "bin/",
+    ".claude/",
+    "DESIGN.md"
+  ],
+  "keywords": ["perficient", "brand", "claude-code", "hook", "design-system"],
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Perficient-Corporate/prft-brand-hook"
+  }
+}
