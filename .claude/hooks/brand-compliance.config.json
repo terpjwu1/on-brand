@@ -1,13 +1,16 @@
 {
-  "mode": "warn",
+  "mode": "strict",
   "autoDiscover": true,
-  "scanOutputDirs": [
-    "dist",
-    "build",
-    "out",
-    ".next",
-    "public"
-  ],
+  "scanOutputDirs": ["dist", "build", "out", ".next", "public"],
   "scanRecencyMs": 30000,
-  "maxFilesToScan": 20
+  "maxFilesToScan": 20,
+  "checkers": {
+    "core-tokens": true,
+    "gray-body-text": true,
+    "sidebar-bars": true,
+    "card-backgrounds": true,
+    "font-families": true,
+    "heading-color": true,
+    "layout-busyness": true
+  }
 }
