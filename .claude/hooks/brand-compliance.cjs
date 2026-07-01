@@ -647,6 +647,126 @@ function checkColorPairings(ctx) {
   return violations;
 }
 
+// --- Checker: Color Proportions (always advisory) ---
+function checkColorProportions(ctx) {
+  const { cssBlocks, content } = ctx;
+  const violations = [];
+
+  // Color groups
+  const GROUPS = {
+    gradient: new Set(['aacbe4', 'def0ff', 'eef7ff']),
+    sky: new Set(['c5dcee']),
+    lightGray: new Set(['dfe7ed']),
+    blueSpruce: new Set(['075056']),
+    navy: new Set(['024879']),
+    white: new Set(['ffffff']),
+    black: new Set(['1b2227']),
+    turquoise: new Set(['71d8c5']),
+    poppy: new Set(['fe3a39']),
+    tertiary: new Set(['4ab3e9', '324eb5', '001a6e', '6f1d82']),
+  };
+
+  // Selector weight lookup
+  function getSelectorWeight(selector) {
+    if (/^(?::root|html|body)$/i.test(selector)) return 10;
+    if (/\b(section|main|header|footer|nav)\b/i.test(selector)) return 6;
+    if (/\.(hero|banner|container|wrapper|page)\b/i.test(selector)) return 6;
+    if (/\.(card|panel|module)\b/i.test(selector)) return 4;
+    if (/\b(div|article|aside)\b/i.test(selector)) return 4;
+    if (/\b(h[1-6]|p|li|ul|ol)\b/i.test(selector)) return 2;
+    if (/\b(span|a|small|em|strong)\b/i.test(selector)) return 1;
+    return 3; // default for class-only selectors
+  }
+
+  // Property weight lookup
+  function getPropertyWeight(prop) {
+    if (prop === 'background' || prop === 'background-color') return 5;
+    if (prop === 'fill' || prop === 'stroke') return 3;
+    if (prop === 'color') return 2;
+    if (prop.startsWith('border')) return 1;
+    return 0.5;
+  }
+
+  // Identify which group a color belongs to
+  function getGroup(hex) {
+    for (const [group, colors] of Object.entries(GROUPS)) {
+      if (colors.has(hex)) return group;
+    }
+    return null;
+  }
+
+  // Calculate scores
+  const scores = {};
+  for (const group of Object.keys(GROUPS)) scores[group] = 0;
+  let totalScore = 0;
+
+  for (const block of cssBlocks) {
+    const selWeight = getSelectorWeight(block.selector);
+
+    for (const { prop, value } of block.properties) {
+      const propWeight = getPropertyWeight(prop);
+      if (propWeight === 0) continue;
+
+      // Extract all hex colors from this declaration
+      const hexes = [];
+      const hexRegex = /#([0-9a-fA-F]{6})\b/g;
+      let m;
+      while ((m = hexRegex.exec(value)) !== null) {
+        hexes.push(m[1].toLowerCase());
+      }
+
+      if (hexes.length === 0) continue;
+
+      // Split score across colors in multi-color declarations (gradients)
+      const scorePerColor = (selWeight * propWeight) / hexes.length;
+
+      for (const hex of hexes) {
+        const group = getGroup(hex);
+        if (group) {
+          scores[group] += scorePerColor;
+          totalScore += scorePerColor;
+        }
+      }
+    }
+  }
+
+  if (totalScore === 0) return violations;
+
+  // Calculate percentages
+  const pct = {};
+  for (const [group, score] of Object.entries(scores)) {
+    pct[group] = (score / totalScore) * 100;
+  }
+
+  // Check thresholds
+  const poppyPct = pct.poppy || 0;
+  if (poppyPct > 5) {
+    violations.push(`[color-proportions] Poppy at ${poppyPct.toFixed(0)}% — should be ≤5% (use sparingly) (advisory)`);
+  }
+
+  const tertiaryPct = (pct.tertiary || 0);
+  if (tertiaryPct > 4) {
+    violations.push(`[color-proportions] Tertiaries at ${tertiaryPct.toFixed(0)}% — should be ≤4% (data-viz only) (advisory)`);
+  }
+
+  const dominantSurface = (pct.gradient || 0) + (pct.sky || 0) + (pct.lightGray || 0) + (pct.white || 0);
+  if (dominantSurface < 30 && totalScore > 20) {
+    violations.push(`[color-proportions] Breathing room (gradient+sky+gray+white) at ${dominantSurface.toFixed(0)}% — should be ≥30% (advisory)`);
+  }
+
+  const primaryBrand = (pct.blueSpruce || 0) + (pct.navy || 0);
+  if (primaryBrand < 20 && totalScore > 20) {
+    violations.push(`[color-proportions] Brand primaries (Blue Spruce+Navy) at ${primaryBrand.toFixed(0)}% — should be ≥20% (advisory)`);
+  }
+
+  const turquoisePct = pct.turquoise || 0;
+  if (turquoisePct > 15) {
+    violations.push(`[color-proportions] Turquoise at ${turquoisePct.toFixed(0)}% — should be ≤15% (accent, not a flood) (advisory)`);
+  }
+
+  return violations;
+}
+
 // --- Checker registry ---
 const CHECKERS = [
   { id: 'core-tokens', fn: checkCoreTokens, strictCapable: true },
@@ -661,6 +781,7 @@ const CHECKERS = [
   { id: 'spacing', fn: checkSpacing, strictCapable: true },
   { id: 'gradient-usage', fn: checkGradientUsage, strictCapable: true },
   { id: 'color-pairings', fn: checkColorPairings, strictCapable: true },
+  { id: 'color-proportions', fn: checkColorProportions, strictCapable: false },
   { id: 'layout-busyness', fn: checkLayoutBusyness, strictCapable: false },
 ];
 
