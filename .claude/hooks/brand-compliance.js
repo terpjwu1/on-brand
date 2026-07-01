@@ -336,6 +336,198 @@ function checkLayoutBusyness(ctx) {
   return violations;
 }
 
+// --- Checker: Typography Hierarchy ---
+function checkTypographyHierarchy(ctx) {
+  const { cssBlocks } = ctx;
+  const violations = [];
+
+  for (const block of cssBlocks) {
+    const isH1H2H3 = /\bh[1-3]\b/i.test(block.selector);
+    const isH4H5H6 = /\bh[4-6]\b/i.test(block.selector);
+    const isBody = BODY_SELECTORS.test(block.selector) && !HEADING_SELECTORS.test(block.selector);
+
+    for (const { prop, value } of block.properties) {
+      if (prop !== 'font-family') continue;
+      const primary = value.split(',')[0].trim().replace(/["']/g, '').toLowerCase();
+
+      // FK Screamer only for H1-H3
+      if (primary === 'fk screamer legacy') {
+        if (!isH1H2H3 && !HEADING_SELECTORS.test(block.selector)) {
+          violations.push(`[type-hierarchy] FK Screamer Legacy used on "${block.selector}" — only allowed for H1-H3 headings`);
+        }
+      }
+      // Noe Display only for H4-H6 and stats
+      if (primary === 'noe display') {
+        if (isBody && !isH4H5H6 && !/stat|number|metric/i.test(block.selector)) {
+          violations.push(`[type-hierarchy] Noe Display used on body text "${block.selector}" — only allowed for H4-H6 and stats`);
+        }
+      }
+      // Untitled Sans should not be on H1-H3
+      if (primary === 'untitled sans' && isH1H2H3) {
+        violations.push(`[type-hierarchy] Untitled Sans used on "${block.selector}" — H1-H3 must use FK Screamer Legacy`);
+      }
+    }
+  }
+
+  return violations;
+}
+
+// --- Checker: Uppercase on FK Screamer ---
+function checkUppercaseRule(ctx) {
+  const { cssBlocks, content } = ctx;
+  const violations = [];
+
+  // Check if FK Screamer selectors also have text-transform: uppercase
+  for (const block of cssBlocks) {
+    let usesFKScreamer = false;
+    let hasUppercase = false;
+
+    for (const { prop, value } of block.properties) {
+      if (prop === 'font-family' && /fk screamer/i.test(value)) usesFKScreamer = true;
+      if (prop === 'text-transform' && /uppercase/i.test(value)) hasUppercase = true;
+    }
+
+    if (usesFKScreamer && !hasUppercase) {
+      violations.push(`[uppercase-rule] FK Screamer Legacy on "${block.selector}" missing text-transform: uppercase — FK Screamer must always be uppercase`);
+    }
+  }
+
+  // Check inline: <h1 style="font-family: FK Screamer..."> without uppercase
+  const inlineFKRegex = /<(h[1-3])[^>]*style=["']([^"']*)["']/gi;
+  let m;
+  while ((m = inlineFKRegex.exec(content)) !== null) {
+    const style = m[2].toLowerCase();
+    if (/fk screamer/i.test(style) && !/text-transform\s*:\s*uppercase/.test(style)) {
+      violations.push(`[uppercase-rule] Inline ${m[1]} uses FK Screamer without text-transform: uppercase`);
+    }
+  }
+
+  return violations;
+}
+
+// --- Checker: Icon Color Pairing ---
+function checkIconColorPairing(ctx) {
+  const { cssBlocks, content } = ctx;
+  const violations = [];
+
+  // Valid icon pairings: bg → icon color
+  // Blue Spruce (#075056) → Turquoise (#71d8c5)
+  // Turquoise (#71d8c5) → Blue Spruce (#075056)
+  // Navy (#024879) → Turquoise (#71d8c5)
+  // White/Light Gray → Navy (#024879)
+  const ICON_SELECTORS = /\b(icon|svg|\.ico|\.symbol|\.glyph)\b/i;
+
+  for (const block of cssBlocks) {
+    if (!ICON_SELECTORS.test(block.selector)) continue;
+
+    for (const { prop, value } of block.properties) {
+      if (prop !== 'color' && prop !== 'fill') continue;
+      const hexMatch = value.match(/#([0-9a-fA-F]{6})\b/);
+      if (!hexMatch) continue;
+
+      const color = hexMatch[1].toLowerCase();
+      // Icons should only be: #71d8c5 (Turquoise), #075056 (Blue Spruce), #024879 (Navy)
+      const validIconColors = new Set(['71d8c5', '075056', '024879']);
+      if (!validIconColors.has(color) && color !== 'ffffff') {
+        violations.push(`[icon-color] Icon uses #${color} on "${block.selector}" — icons must be Turquoise, Blue Spruce, or Navy`);
+      }
+    }
+  }
+
+  // Check SVG fill attributes for non-brand icon colors
+  const svgFillRegex = /<(?:path|circle|rect|polygon)[^>]*fill=["']#([0-9a-fA-F]{6})["']/gi;
+  const validSvgFills = new Set(['71d8c5', '075056', '024879', 'ffffff']);
+  let m2;
+  while ((m2 = svgFillRegex.exec(content)) !== null) {
+    const color = m2[1].toLowerCase();
+    if (!validSvgFills.has(color) && !violations.some(v => v.includes(color))) {
+      violations.push(`[icon-color] SVG fill #${color} — icons should use Turquoise (#71D8C5), Blue Spruce (#075056), or Navy (#024879)`);
+      break;
+    }
+  }
+
+  return violations;
+}
+
+// --- Checker: Spacing/Whitespace ---
+function checkSpacing(ctx) {
+  const { cssBlocks } = ctx;
+  const violations = [];
+
+  for (const block of cssBlocks) {
+    // Check max-width exceeds 90rem/1440px on containers
+    if (/container|wrapper|main|page/i.test(block.selector)) {
+      for (const { prop, value } of block.properties) {
+        if (prop === 'max-width') {
+          const pxMatch = value.match(/(\d+)px/);
+          if (pxMatch && parseInt(pxMatch[1], 10) > 1440) {
+            violations.push(`[spacing] max-width ${value} on "${block.selector}" exceeds brand max (1440px / 90rem)`);
+          }
+          const remMatch = value.match(/([\d.]+)rem/);
+          if (remMatch && parseFloat(remMatch[1]) > 90) {
+            violations.push(`[spacing] max-width ${value} on "${block.selector}" exceeds brand max (90rem)`);
+          }
+        }
+      }
+    }
+
+    // Check section spacing — flag very tight section margins/padding
+    if (/section|\.section/i.test(block.selector)) {
+      for (const { prop, value } of block.properties) {
+        if (prop === 'padding' || prop === 'padding-top' || prop === 'padding-bottom' ||
+            prop === 'margin-top' || prop === 'margin-bottom') {
+          const pxMatch = value.match(/(\d+)px/);
+          if (pxMatch) {
+            const px = parseInt(pxMatch[1], 10);
+            if (px > 0 && px < 32) {
+              violations.push(`[spacing] Section spacing ${px}px on "${block.selector}" is too tight — brand uses 64-96px between sections`);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return violations;
+}
+
+// --- Checker: Gradient Usage ---
+function checkGradientUsage(ctx) {
+  const { cssBlocks } = ctx;
+  const violations = [];
+
+  // Brand gradients use Sky tones only: #AACBE4, #DEF0FF, #EEF7FF
+  const GRADIENT_APPROVED_COLORS = new Set(['aacbe4', 'def0ff', 'eef7ff']);
+
+  for (const block of cssBlocks) {
+    for (const { prop, value } of block.properties) {
+      if (prop !== 'background' && prop !== 'background-image') continue;
+      if (!/linear-gradient/i.test(value)) continue;
+
+      // Skip hero/banner contexts
+      if (HERO_SELECTORS.test(block.selector)) continue;
+
+      // Extract colors from gradient
+      const gradientColors = [];
+      const hexInGradient = value.match(/#([0-9a-fA-F]{6})/g) || [];
+      for (const hex of hexInGradient) {
+        gradientColors.push(hex.slice(1).toLowerCase());
+      }
+
+      const nonApproved = gradientColors.filter(c =>
+        !GRADIENT_APPROVED_COLORS.has(c) && c !== 'ffffff' && !APPROVED_COLORS.has(c)
+      );
+
+      if (nonApproved.length > 0) {
+        violations.push(`[gradient-usage] Gradient on "${block.selector}" uses non-approved color(s) #${nonApproved[0]} — brand gradients use Sky tones only`);
+      }
+    }
+  }
+
+  return violations;
+}
+
 // --- Checker registry ---
 const CHECKERS = [
   { id: 'core-tokens', fn: checkCoreTokens, strictCapable: true },
@@ -344,6 +536,11 @@ const CHECKERS = [
   { id: 'card-backgrounds', fn: checkCardBackgrounds, strictCapable: true },
   { id: 'font-families', fn: checkFontFamilies, strictCapable: true },
   { id: 'heading-color', fn: checkHeadingColor, strictCapable: true },
+  { id: 'type-hierarchy', fn: checkTypographyHierarchy, strictCapable: true },
+  { id: 'uppercase-rule', fn: checkUppercaseRule, strictCapable: true },
+  { id: 'icon-color', fn: checkIconColorPairing, strictCapable: true },
+  { id: 'spacing', fn: checkSpacing, strictCapable: true },
+  { id: 'gradient-usage', fn: checkGradientUsage, strictCapable: true },
   { id: 'layout-busyness', fn: checkLayoutBusyness, strictCapable: false },
 ];
 

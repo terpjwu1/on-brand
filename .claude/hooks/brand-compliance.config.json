@@ -11,6 +11,11 @@
     "card-backgrounds": true,
     "font-families": true,
     "heading-color": true,
+    "type-hierarchy": true,
+    "uppercase-rule": true,
+    "icon-color": true,
+    "spacing": true,
+    "gradient-usage": true,
     "layout-busyness": true
   }
 }
