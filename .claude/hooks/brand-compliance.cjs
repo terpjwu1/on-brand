@@ -59,10 +59,10 @@ function loadConfig() {
 }
 
 // --- Constants ---
-const VISUAL_EXTENSIONS = /\.(html|css|scss|less|tsx|jsx|vue|svelte|svg|pptx|ppt|pdf|docx|doc|xlsx)$/i;
-const DOC_GEN_PATTERN = /\.(pptx|pdf|docx|xlsx|ppt|doc)\b/i;
+const VISUAL_EXTENSIONS = /\.(html|css|scss|less|tsx|jsx|vue|svelte|svg|drawio|pptx|ppt|pdf|docx|doc|xlsx)$/i;
+const DOC_GEN_PATTERN = /\.(pptx|pdf|docx|xlsx|ppt|doc|drawio)\b/i;
 const PRESENTATION_PATTERN = /\.(pptx|ppt)\b/i;
-const SCANNABLE_EXTENSIONS = /\.(html|css|scss|less|svg)$/i;
+const SCANNABLE_EXTENSIONS = /\.(html|css|scss|less|svg|drawio)$/i;
 
 // --- Format detection ---
 function detectContext(filePath, command) {
