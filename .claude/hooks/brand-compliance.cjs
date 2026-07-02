@@ -16,6 +16,30 @@ const watchdog = setTimeout(() => {
 }, 4000);
 watchdog.unref();
 
+// --- Tool response extraction (handles varying PostToolUse stdin shapes) ---
+function stringifyToolResponse(value, depth) {
+  if (value == null || depth > 3) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(item => stringifyToolResponse(item, depth + 1)).filter(Boolean).join('\n');
+  if (typeof value === 'object') {
+    const parts = [];
+    for (const key of ['stdout', 'stderr', 'output', 'text', 'content', 'message']) {
+      if (value[key] != null) parts.push(stringifyToolResponse(value[key], depth + 1));
+    }
+    return parts.filter(Boolean).join('\n');
+  }
+  return '';
+}
+
+function getToolResponseText(input) {
+  return [
+    stringifyToolResponse(input.tool_response, 0),
+    stringifyToolResponse(input.tool_output, 0),
+    stringifyToolResponse(input.stdout, 0),
+  ].filter(Boolean).join('\n');
+}
+
 // --- Config loading (fail-open: logs to stderr on error) ---
 function loadConfig() {
   const defaults = {
@@ -59,10 +83,10 @@ function loadConfig() {
 }
 
 // --- Constants ---
-const VISUAL_EXTENSIONS = /\.(html|css|scss|less|tsx|jsx|vue|svelte|svg|drawio|pptx|ppt|pdf|docx|doc|xlsx)$/i;
-const DOC_GEN_PATTERN = /\.(pptx|pdf|docx|xlsx|ppt|doc|drawio)\b/i;
+const VISUAL_EXTENSIONS = /\.(html|css|scss|less|tsx|jsx|vue|svelte|svg|drawio(?:\.xml)?|pptx|ppt|pdf|docx|doc|xlsx)$/i;
+const DOC_GEN_PATTERN = /\.(pptx|pdf|docx|xlsx|ppt|doc)\b|\.drawio(?:\.xml)?$/i;
 const PRESENTATION_PATTERN = /\.(pptx|ppt)\b/i;
-const SCANNABLE_EXTENSIONS = /\.(html|css|scss|less|svg|drawio)$/i;
+const SCANNABLE_EXTENSIONS = /\.(html|css|scss|less|svg|drawio(?:\.xml)?)$/i;
 
 // --- Format detection ---
 function detectContext(filePath, command) {
@@ -134,6 +158,38 @@ function parseCssBlocks(content) {
     }
     if (properties.length > 0) {
       blocks.push({ selector, properties });
+    }
+  }
+  return blocks;
+}
+
+// --- Drawio style attribute parser ---
+const DRAWIO_SOURCE_RE = /\.drawio(?:\.xml)?$/i;
+
+function parseDrawioStyleBlocks(content) {
+  const blocks = [];
+  const styleRegex = /style=["']([^"']+)["']/gi;
+  const propMap = {
+    fillcolor: 'background-color',
+    gradientcolor: 'background-color',
+    strokecolor: 'border-color',
+    fontcolor: 'color',
+    fontfamily: 'font-family',
+  };
+  let match, index = 0;
+  while ((match = styleRegex.exec(content)) !== null) {
+    const properties = [];
+    for (const part of match[1].split(';')) {
+      const eq = part.indexOf('=');
+      if (eq === -1) continue;
+      const key = part.slice(0, eq).trim().toLowerCase();
+      const value = part.slice(eq + 1).trim();
+      const prop = propMap[key];
+      if (!prop || !value || value === 'none') continue;
+      properties.push({ prop, value });
+    }
+    if (properties.length) {
+      blocks.push({ selector: `drawio-cell-${index++}`, properties });
     }
   }
   return blocks;
@@ -908,7 +964,10 @@ function scanFileForViolations(filePath, config, command) {
     const content = fs.readFileSync(filePath, 'utf8');
 
     const context = detectContext(filePath, command);
-    const cssBlocks = parseCssBlocks(content);
+    let cssBlocks = parseCssBlocks(content);
+    if (DRAWIO_SOURCE_RE.test(filePath)) {
+      cssBlocks = cssBlocks.concat(parseDrawioStyleBlocks(content));
+    }
     const ctx = { content, cssBlocks, filePath, context };
 
     const checkerConfig = config.checkers || {};
@@ -1193,12 +1252,7 @@ process.stdin.on('end', () => {
 
       if (toolName === 'Bash') {
         const command = input.tool_input?.command || '';
-        // tool_response is the tool's output — may be a string (raw stdout)
-        // or an object with .stdout/.stderr fields depending on version
-        const rawResponse = input.tool_response || '';
-        const stdout = typeof rawResponse === 'string'
-          ? rawResponse
-          : (rawResponse.stdout || rawResponse.output || JSON.stringify(rawResponse));
+        const stdout = getToolResponseText(input);
         filesToScan = findOutputFiles(command, stdout, config);
       }
 
